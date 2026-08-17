@@ -1,0 +1,110 @@
+# Règles Semgrep custom — MediLib (TP Récapitulatif DevSecOps, SUP de CO Dakar)
+
+rules:
+
+  # Règle 1 (imposée) — SQLi : requête SQL construite par template literal interpolé
+  - id: medilib-sqli-template-literal
+    patterns:
+      - pattern-either:
+          - pattern: db.run(`...${$X}...`, ...)
+          - pattern: db.all(`...${$X}...`, ...)
+          - pattern: db.get(`...${$X}...`, ...)
+    message: >-
+      SQL Injection (CWE-89) — requête SQL construite par interpolation directe
+      (${...}) d'une donnée utilisateur. Utiliser une requête préparée avec des
+      paramètres liés (?).
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      cwe: CWE-89
+      owasp: A03:2021 - Injection
+
+  # Règle 2 (imposée) — secret en dur : const dont le nom évoque un secret
+  - id: medilib-hardcoded-secret-const
+    patterns:
+      - pattern: const $VAR = "$SECRET"
+      # metavariable-regex est ancré au début (re.match) : le `.*` est indispensable
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i).*(SECRET|PASSWORD|TOKEN|KEY|ENCRYPTION)
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: .{6,}
+    message: >-
+      Secret hardcodé (CWE-798) — constante secrète initialisée avec une valeur
+      littérale dans le code source. Charger la valeur depuis
+      process.env.NOM_VARIABLE via dotenv.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      cwe: CWE-798
+      owasp: A02:2021 - Cryptographic Failures
+
+  # Règle 3 (au choix) — Mass Assignment : champs à mettre à jour dérivés du body
+  - id: medilib-mass-assignment
+    pattern: Object.keys($BODY).map($F => $EXPR)
+    message: >-
+      Mass Assignment (CWE-915) — les champs mis à jour sont dérivés du corps de
+      la requête sans liste blanche : un membre peut se promouvoir admin.
+      Définir explicitement les champs autorisés.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      cwe: CWE-915
+      owasp: A04:2021 - Insecure Design
+
+  # Règle 4 (bonus) — SQLi passant par une variable intermédiaire (mode taint)
+  - id: medilib-sqli-taint
+    mode: taint
+    pattern-sources:
+      - pattern: req.body
+      - pattern: req.query
+      - pattern: req.params
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: db.get($SQL, ...)
+              - pattern: db.run($SQL, ...)
+              - pattern: db.all($SQL, ...)
+          - focus-metavariable: $SQL
+    message: >-
+      SQL Injection (CWE-89) — une donnée de req.body/query/params transite par
+      une variable avant d'atteindre db.get/run/all sans paramètre lié.
+      Utiliser une requête préparée avec des paramètres liés (?).
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      cwe: CWE-89
+      owasp: A03:2021 - Injection
+
+  # Règle 5 (bonus) — secret JWT écrit en dur dans jwt.sign / jwt.verify
+  - id: medilib-hardcoded-jwt-secret
+    patterns:
+      - pattern-either:
+          - pattern: jwt.verify($TOKEN, "...")
+          - pattern: jwt.sign($PAYLOAD, "...")
+    message: >-
+      Secret JWT hardcodé (CWE-798) — le secret de signature/vérification est
+      écrit en dur au lieu d'être lu dans process.env.JWT_SECRET, ce qui permet
+      de forger des tokens valides.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      cwe: CWE-798
+      owasp: A02:2021 - Cryptographic Failures
+
+  # Règle 6 (bonus) — réponse d'erreur renvoyant la requête SQL ou la stack trace au client
+  - id: medilib-error-response-leak
+    patterns:
+      - pattern-either:
+          - pattern: 'res.status(...).json({..., query: $Q, ...})'
+          - pattern: 'res.status(...).json({..., stack: $S, ...})'
+    message: >-
+      Fuite d'informations techniques (CWE-209) — la réponse d'erreur contient la
+      requête SQL brute ou la stack trace. Logger le détail côté serveur et ne
+      renvoyer qu'un message générique.
+    languages: [javascript]
+    severity: WARNING
+    metadata:
+      cwe: CWE-209
+      owasp: A05:2021 - Security Misconfiguration
