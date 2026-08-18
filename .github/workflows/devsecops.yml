@@ -1,0 +1,196 @@
+name: DevSecOps Pipeline — MediLib
+# SUP de CO Dakar — Cours 2INF2311
+# SAST (Semgrep) → SCA (Trivy) → Build Docker → Scan Image → Summary
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+
+  sast:
+    name: SAST — Semgrep
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      # continue-on-error : le code est intentionnellement vulnérable, on veut
+      # que les findings remontent dans GitHub Security plutôt que de bloquer
+      # tout de suite la pipeline (voir Q4.1 sur exit-code prioritaire)
+      - name: Run Semgrep SAST
+        continue-on-error: true
+        run: |
+          semgrep scan \
+            --config .semgrep/ \
+            --config p/owasp-top-ten \
+            --config p/nodejs \
+            --config p/secrets \
+            --sarif --output semgrep.sarif \
+            --metrics=off || true
+
+      - name: Récapitulatif des règles custom déclenchées
+        continue-on-error: true
+        run: |
+          echo "## 🔍 Findings des règles custom MediLib" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -o '"medilib-[a-z-]*"' semgrep.sarif | sort | uniq -c >> $GITHUB_STEP_SUMMARY || echo "aucun finding custom" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  sca:
+    name: SCA — Trivy Dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # Trivy lit package-lock.json pour résoudre les versions transitives
+      - name: Generate package-lock.json
+        run: npm install --package-lock-only
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload Trivy SCA SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Trivy SCA table output
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+  build:
+    name: Build — Docker Image
+    runs-on: ubuntu-latest
+    # Ne se déclenche que si SAST et SCA passent
+    needs: [sast, sca]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t medilib:${{ github.sha }} .
+          docker tag medilib:${{ github.sha }} medilib:latest
+
+      - name: Save image for next job
+        run: docker save medilib:${{ github.sha }} -o medilib-image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: medilib-image.tar
+          retention-days: 1
+
+  scan-image:
+    name: Trivy — Image Scan
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker image
+        run: docker load -i medilib-image.tar
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: medilib:${{ github.sha }}
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload Trivy image SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Trivy image table output
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: medilib:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [sast, sca, build, scan-image]
+    if: always()
+
+    steps:
+      - name: Security pipeline summary
+        run: |
+          echo "## 🔒 DevSecOps Pipeline — MediLib" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Outil | Périmètre | Statut |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST | Semgrep | Code source (6 règles custom + packs OWASP) | ${{ needs.sast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SCA | Trivy fs | Dépendances npm | ${{ needs.sca.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | Docker | Image applicative | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan Image | Trivy image | CVE de l'image (ignore-unfixed) | ${{ needs.scan-image.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📋 Détail des alertes : onglet **Security → Code scanning**." >> $GITHUB_STEP_SUMMARY
