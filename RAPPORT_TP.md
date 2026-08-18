@@ -188,9 +188,31 @@ Fichier [`.semgrep/rules.yaml`](.semgrep/rules.yaml) — **6 règles**, chacune 
 
 ## Partie 4 — Pipeline GitHub Actions
 
-*(à rédiger)*
+Fichier [`.github/workflows/devsecops.yml`](.github/workflows/devsecops.yml) — **5 jobs** enchaînés :
 
-> 📷 **CAPTURES À INSÉRER ICI** — onglet Actions (jobs verts) · Security → Code scanning filtré sur `tool:Semgrep OSS`.
+```
+SAST (Semgrep) ─┐
+                ├─→ Build Docker ─→ Scan Image (Trivy) ─→ Security Summary
+SCA (Trivy fs) ─┘
+```
+
+| Job | Outil | Périmètre | Exigence de l'énoncé couverte |
+|-----|-------|-----------|-------------------------------|
+| `sast` | Semgrep | Code source : 6 règles custom + packs `p/owasp-top-ten`, `p/nodejs`, `p/secrets` | Résultat uploadé en **SARIF** dans GitHub Security |
+| `sca` | Trivy (`scan-type: fs`) | Dépendances npm | Résultat uploadé en **SARIF** dans GitHub Security |
+| `build` | Docker | Image applicative | `needs: [sast, sca]` — ne se déclenche **que si** SAST et SCA passent |
+| `scan-image` | Trivy (`image-ref`) | CVE de l'image | `ignore-unfixed: true` |
+| `security-summary` | — | Récapitulatif | `if: always()` + tableau markdown dans le *step summary* |
+
+**Pourquoi les jobs SAST/SCA « passent » malgré des findings.** Le code est intentionnellement vulnérable : si le job échouait dès qu'une faille est trouvée, `build` ne se déclencherait jamais. L'étape Semgrep utilise donc `continue-on-error: true`, tandis que le SARIF est uploadé quel que soit le résultat (`if: always()`) pour que les alertes apparaissent bien dans Security. C'est un choix pédagogique délibéré — voir Q4.1 ci-dessous sur où un vrai blocage serait justifié.
+
+> 📷 **CAPTURE À INSÉRER ICI** — onglet Actions, les 5 jobs au vert.
+
+> 📷 **CAPTURE À INSÉRER ICI** — Security → Code scanning, filtré sur `tool:Semgrep`, alertes en **Open**.
+
+### Q4.1 — Sur quel job mettre `exit-code: '1'` en priorité ?
+
+**Sur le job SAST (Semgrep).** Dans un contexte médical, les données en jeu (identité des praticiens, mots de passe, historique d'emprunts) relèvent du secret médical : la SQLi du login et le secret JWT en dur donnent un accès immédiat et total à cette base, et ce sont des défauts **de notre propre code**, donc corrigeables tout de suite. À l'inverse, les CVE remontées par Trivy sur l'image de base sont souvent sans correctif disponible et pas nécessairement exploitables dans notre contexte — bloquer systématiquement dessus stopperait les livraisons sans réduire le risque réel, et habituerait l'équipe à contourner la barrière.
 
 ---
 
