@@ -8,8 +8,7 @@ const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Token requis' });
   try {
-    // Correction  : secret lu depuis l'environnement
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = jwt.verify(token, 'medilib_jwt_2024');
     next();
   } catch { res.status(403).json({ error: 'Token invalide' }); }
 };

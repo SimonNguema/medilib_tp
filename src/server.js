@@ -12,19 +12,10 @@ app.use(express.urlencoded({ extended: true }));
 
 // ❌ VULN 1 — Pas de headers de sécurité (helmet manquant)
 
-// ✓ CORRECTION 2 — Secrets hardcodés (CWE-798 / OWASP A02:2021)
-
-// ❌ AVANT — secrets écrits en dur : lisibles dans le code source ET dans tout
-//    l'historique Git. Un dépôt public suffisait à forger des JWT admin valides.
-// const JWT_SECRET     = "medilib_jwt_2024";
-// const ADMIN_TOKEN    = "ml_admin_tok3n_secret";
-// const DB_ENCRYPTION  = "dbK3yMediLib!";
-
-// secrets sortis du code et chargés depuis .env .
-//    Ils peuvent être changés ou révoqués sans toucher au code.
-const JWT_SECRET     = process.env.JWT_SECRET;
-const ADMIN_TOKEN    = process.env.ADMIN_TOKEN;
-const DB_ENCRYPTION  = process.env.DB_ENCRYPTION;
+// ❌ VULN 2 — Secrets hardcodés
+const JWT_SECRET     = "medilib_jwt_2024";
+const ADMIN_TOKEN    = "ml_admin_tok3n_secret";
+const DB_ENCRYPTION  = "dbK3yMediLib!";
 
 // ❌ VULN 3 — CORS permissif
 app.use((req, res, next) => {
