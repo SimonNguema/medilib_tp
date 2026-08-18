@@ -218,9 +218,73 @@ SCA (Trivy fs) ─┘
 
 ## Partie 5 — Corrections
 
-*(à rédiger)*
+Le code vulnérable est **conservé en commentaire** au-dessus de chaque correction, avec l'explication de la faille.
 
-> 📷 **CAPTURE À INSÉRER ICI** — Security tab filtré `is:closed`, alertes en **Fixed**.
+### Correction 1 — SQL Injection du login (`src/routes/auth.js`)
+
+```javascript
+// ❌ AVANT
+const query = `SELECT * FROM membres WHERE email='${email}' AND password='${password}'`;
+db.get(query, (err, membre) => {
+  if (err) return res.status(500).json({ error: err.message, query });
+
+// ✓ APRÈS
+const query = 'SELECT * FROM membres WHERE email = ? AND password = ?';
+db.get(query, [email, password], (err, membre) => {
+  if (err) return res.status(500).json({ error: 'Erreur serveur' });
+```
+
+**Requête préparée à paramètres liés** : le driver SQLite traite `email` et `password` comme des *données*, jamais comme du code SQL. Le payload `admin@medilib.sn' --` (Q2.2) est désormais cherché **littéralement** comme adresse e-mail et ne correspond à aucun compte. La requête SQL n'est plus renvoyée au client dans le message d'erreur.
+
+> 📷 **CAPTURE 1 À INSÉRER ICI** — [`src/routes/auth.js`](src/routes/auth.js), la fonction `/login` complète : code AVANT commenté + code APRÈS, tel qu'ouvert dans l'éditeur.
+
+> 📷 **CAPTURE 2 À INSÉRER ICI** — le payload de Q2.2 rejoué (Postman/curl) **après correction** : réponse `401 Identifiants invalides` au lieu du token admin.
+
+### Correction 2 — Secrets hardcodés (`src/server.js`)
+
+```javascript
+// ❌ AVANT
+const JWT_SECRET     = "medilib_jwt_2024";
+const ADMIN_TOKEN    = "ml_admin_tok3n_secret";
+const DB_ENCRYPTION  = "dbK3yMediLib!";
+
+// ✓ APRÈS
+const JWT_SECRET     = process.env.JWT_SECRET;
+const ADMIN_TOKEN    = process.env.ADMIN_TOKEN;
+const DB_ENCRYPTION  = process.env.DB_ENCRYPTION;
+```
+
+Secrets sortis du code et chargés depuis `.env`, exclu par `.gitignore`. Ils peuvent désormais être changés ou révoqués sans modifier le code.
+
+**Correction de cohérence indispensable :** `jwt.sign` (`auth.js`) signe maintenant avec `process.env.JWT_SECRET`, mais les trois middlewares `auth` de `livres.js`, `emprunts.js` et `membres.js` vérifiaient encore avec le littéral `'medilib_jwt_2024'`. Sans les aligner, **tout token émis après la correction aurait été rejeté** : l'application était cassée. Les 4 emplacements utilisent désormais la variable d'environnement.
+
+> 📷 **CAPTURE 3 À INSÉRER ICI** — [`src/server.js`](src/server.js), lignes 15-27 (AVANT commenté + APRÈS).
+
+> 📷 **CAPTURE 4 À INSÉRER ICI** — un des 3 middlewares corrigés, par exemple [`src/routes/membres.js`](src/routes/membres.js) ligne ~11, pour montrer l'alignement sur `process.env.JWT_SECRET`.
+
+### Vérification Open → Fixed
+
+Mesure réalisée en local avec Semgrep (Docker) sur les 6 règles custom, avant et après corrections :
+
+| Règle | Avant | Après | Écart |
+|-------|-------|-------|-------|
+| `medilib-sqli-taint` | 6 | 5 | −1 |
+| `medilib-hardcoded-jwt-secret` | 4 | 0 | **−4** |
+| `medilib-hardcoded-secret-const` | 3 | 0 | **−3** |
+| `medilib-sqli-template-literal` | 3 | 3 | — |
+| `medilib-error-response-leak` | 3 | 2 | −1 |
+| `medilib-mass-assignment` | 1 | 1 | — |
+| **Total** | **20** | **11** | **−9** |
+
+Les **9 alertes fermées** correspondent exactement au périmètre corrigé : les 3 secrets de `server.js`, les 4 usages du secret JWT en dur, la SQLi du login et la fuite de requête SQL associée. GitHub compare automatiquement le SARIF du dernier scan avec le précédent : ce qui disparaît passe en **Fixed**, sans action manuelle.
+
+Les 11 findings restants sont **volontairement conservés** : l'énoncé ne demandait que 2 corrections, et ils documentent les vulnérabilités encore ouvertes (mass assignment, SQLi de la recherche et des emprunts, IDOR).
+
+> 📷 **CAPTURE 5 À INSÉRER ICI** — onglet **Actions**, le run déclenché par le commit de correction, 5 jobs verts.
+
+> 📷 **CAPTURE 6 À INSÉRER ICI** — **Security → Code scanning**, filtré `tool:Semgrep`, avant push : alertes en **Open** (référence, déjà capturée en Partie 4).
+
+> 📷 **CAPTURE 7 À INSÉRER ICI** — **Security → Code scanning**, filtré `tool:Semgrep is:closed` : les alertes correspondant aux 2 corrections passées en **Fixed**. *(Attendre 2-3 min après la fin du run avant de rafraîchir.)*
 
 ---
 
