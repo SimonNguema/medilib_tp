@@ -214,6 +214,29 @@ SCA (Trivy fs) ─┘
 
 **Sur le job SAST (Semgrep).** Dans un contexte médical, les données en jeu (identité des praticiens, mots de passe, historique d'emprunts) relèvent du secret médical : la SQLi du login et le secret JWT en dur donnent un accès immédiat et total à cette base, et ce sont des défauts **de notre propre code**, donc corrigeables tout de suite. À l'inverse, les CVE remontées par Trivy sur l'image de base sont souvent sans correctif disponible et pas nécessairement exploitables dans notre contexte — bloquer systématiquement dessus stopperait les livraisons sans réduire le risque réel, et habituerait l'équipe à contourner la barrière.
 
+### Bonus — Managed Scan Semgrep.dev (hors périmètre de l'énoncé)
+
+En complément de la pipeline, le repo `medilib_tp` a été connecté à **semgrep.dev** via l'intégration GitHub App (Projects → *Add project* → sélection du repo). Ce n'est **pas une exigence de l'énoncé** (Partie 4 ne demande qu'un upload SARIF dans GitHub Security, déjà couvert ci-dessus), mais c'est une pratique DevSecOps réelle qui mérite d'être documentée.
+
+**Ce que ça fait concrètement.** Une fois le repo connecté, semgrep.dev scanne le code **de façon autonome** (label *managed-scan* sur la page Projects), indépendamment de la pipeline GitHub Actions — pas de déclenchement par un push, pas de job qui s'exécute dans notre `devsecops.yml`. C'est un second scanner, totalement découplé du premier.
+
+**Différence essentielle avec le job `sast` de la pipeline :**
+
+| | Managed Scan (semgrep.dev) | Job `sast` (notre pipeline) |
+|---|---|---|
+| Déclencheur | semgrep.dev, seul, à son propre rythme | Un `push`/`pull_request` sur le repo |
+| Règles appliquées | Policy par défaut de l'organisation (registre public Semgrep) | `.semgrep/rules.yaml` (nos 6 règles) + packs OWASP/nodejs/secrets |
+| Peut bloquer un déploiement ? | Non — c'est du monitoring passif | Oui, potentiellement (`exit-code`, voir Q4.1) |
+| Résultats vus dans | Dashboard semgrep.dev | GitHub Security (SARIF) |
+
+**Limite constatée en pratique :** les règles `medilib-*` de `.semgrep/rules.yaml` **n'apparaissent jamais** sur semgrep.dev via ce canal — le managed scan applique uniquement la Policy de l'organisation, jamais le fichier du dépôt. Les findings qui y remontent (`missing-user` sur le Dockerfile, `github-actions-mutable-action-tag`, `hardcoded-jwt-secret` générique…) viennent du registre public Semgrep, pas de nos règles custom. Pour que nos règles y apparaissent aussi, il faudrait les publier explicitement dans la Policy de l'organisation (semgrep.dev → Rules Board → Editor → Save to org) — une démarche indépendante de la pipeline, non poursuivie ici car hors périmètre du TP.
+
+**Conclusion pédagogique :** le managed scan est un outil de **veille continue** utile en complément d'une pipeline (il tourne même sans nouveau commit, détecte les nouvelles règles du registre public au fil du temps), mais il ne remplace pas le job CI — seul ce dernier peut conditionner un déploiement à l'absence de faille critique, et seul lui exécute nos règles spécifiques au projet.
+
+> 📷 **CAPTURE À INSÉRER ICI** — semgrep.dev, page **Projects**, ligne `medilib_tp` avec le label *managed-scan* et le nombre de findings.
+
+> 📷 **CAPTURE À INSÉRER ICI** — semgrep.dev, page **Code** (findings du managed scan), montrant des règles du registre public (ex. `missing-user`, `github-actions-mutable-action-tag`) — à comparer avec les règles `medilib-*` visibles uniquement dans GitHub Security.
+
 ---
 
 ## Partie 5 — Corrections
